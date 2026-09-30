@@ -27,7 +27,6 @@ with st.sidebar:
     st.write("Painel de Gestão Mobile")
     st.divider()
     
-    # Botão para Sair / Encerrar Sessão
     if st.button("🚪 Sair da Aplicação", use_container_width=True, type="primary"):
         st.warning("Sessão encerrada. Pode fechar esta aba do navegador.")
         st.stop()
@@ -96,13 +95,19 @@ with aba1:
         st.error(f"Erro ao carregar estoque: {e}")
 
 # ==========================================
-# ABA 2: PEDIDOS PENDENTES
+# ABA 2: PEDIDOS PENDENTES (Com Total de Doces e Tabela de Produtos)
 # ==========================================
 with aba2:
     st.subheader("Pedidos Pendentes")
     try:
         df_pedidos = executar_consulta_turso("""
-            SELECT p.id_pedido AS Pedido, c.nome AS Cliente, p.dt_entrega AS Entrega, p.valor_total AS Total, p.situacao AS Status
+            SELECT 
+                p.id_pedido AS Pedido, 
+                c.nome AS Cliente, 
+                p.dt_entrega AS Entrega, 
+                p.valor_total AS Total, 
+                p.situacao AS Status,
+                (SELECT COALESCE(SUM(d.quantidade), 0) FROM detalhes_pedido d WHERE d.id_pedido = p.id_pedido) AS Total_Doces
             FROM pedidos p
             LEFT JOIN clientes c ON p.id_cliente = c.id_cliente
             WHERE p.situacao != 'Entregue' OR p.situacao IS NULL
@@ -111,22 +116,72 @@ with aba2:
 
         if not df_pedidos.empty:
             for index, row in df_pedidos.iterrows():
-                with st.expander(f"Pedido #{row['Pedido']} - {row['Cliente']} (Entrega: {row['Entrega']})"):
-                    st.write(f"**Valor Total:** R$ {str(row['Total']).replace('.', ',')}")
-                    st.write(f"**Status:** {row['Status']}")
+                id_ped_val = row.get('Pedido')
+                cliente_val = row.get('Cliente', 'Cliente não identificado')
+                entrega_val = row.get('Entrega', '')
+                total_val = row.get('Total', 0)
+                status_val = row.get('Status', '')
+                total_doces_val = row.get('Total_Doces', 0)
+
+                dt_fmt = datetime.strptime(str(entrega_val).strip(), "%Y-%m-%d").strftime("%d/%m/%Y") if entrega_val else ""
+                
+                try:
+                    val_float = float(total_val) if total_val is not None else 0.0
+                except ValueError:
+                    val_float = 0.0
+                val_fmt = f"R$ {val_float:.2f}".replace(".", ",")
+
+                # Título com ID, Cliente, Entrega, Quantidade total de doces e Valor Total
+                with st.expander(f"Pedido #{id_ped_val} | {cliente_val} | Entrega: {dt_fmt} | Qtd Doces: {total_doces_val} | Total: {val_fmt}"):
+                    st.write(f"**Cliente:** {cliente_val}")
+                    st.write(f"**Data de Entrega:** {dt_fmt}")
+                    st.write(f"**Quantidade Total de Doces:** {total_doces_val}")
+                    st.write(f"**Valor Total:** {val_fmt}")
+                    st.write(f"**Status:** {status_val}")
                     
-                    df_det = executar_consulta_turso(f"""
-                        SELECT pr.produto AS Produto, d.quantidade AS Qtd, pr.tipo AS Tipo
+                    st.divider()
+                    st.markdown("##### 🍫 Lista de Produtos do Pedido")
+                    
+                    query_detalhes = f"""
+                        SELECT 
+                            pr.produto AS Produto, 
+                            d.quantidade AS Qtd, 
+                            d.preco_unit AS Preço_Unit, 
+                            d.subtotal AS Subtotal
                         FROM detalhes_pedido d
-                        LEFT JOIN produtos pr ON d.id_produto = pr.id_produto
-                        WHERE d.id_pedido = {row['Pedido']}
-                    """)
+                        JOIN produtos pr ON d.id_produto = pr.id_produto
+                        WHERE d.id_pedido = {id_ped_val}
+                    """
+                    df_det = executar_consulta_turso(query_detalhes)
                     
                     if not df_det.empty:
-                        st.markdown("**Itens do Pedido:**")
                         st.dataframe(df_det, hide_index=True, use_container_width=True)
+                    else:
+                        st.info("Nenhum item detalhado encontrado para este pedido.")
+
+                    st.divider()
+                    st.markdown("##### 💳 Formas de Pagamento / Parcelas")
+                    
+                    query_parcelas = f"""
+                        SELECT 
+                            numero_parcela AS Parc, 
+                            valor AS Valor, 
+                            data_vencimento AS Vencimento, 
+                            forma_pagamento AS Forma, 
+                            status AS Status
+                        FROM parcelas_pedido
+                        WHERE id_pedido = {id_ped_val}
+                        ORDER BY numero_parcela ASC
+                    """
+                    df_parc = executar_consulta_turso(query_parcelas)
+
+                    if not df_parc.empty:
+                        st.dataframe(df_parc, hide_index=True, use_container_width=True)
+                    else:
+                        st.info("Nenhuma parcela/forma de pagamento registrada.")
+
         else:
-            st.success("Nenhum pedido pendente no momento! 🎉")
+            st.success("Não há pedidos pendentes no momento! 🎉")
     except Exception as e:
         st.error(f"Erro ao carregar pedidos: {e}")
 
